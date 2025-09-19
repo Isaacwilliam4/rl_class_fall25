@@ -40,38 +40,33 @@ def opponent_move(state):
     if not acts: return state
     return place(state, random.choice(acts), O)
 
-def step(state, action):
+def step(state, action, player):
     """Agent X acts; environment responds with O's random move.
        Returns (next_state, reward, done) from X's perspective.
     """
     assert action in legal_actions(state), "Illegal action"
-    s1 = place(state, action, X)
+    s1 = place(state, action, player)
     w = check_winner(s1)
     if w == X:  return s1, +1.0, True
     if w == O:  return s1, -1.0, True
     if w == 'DRAW': return s1, 0.0, True
 
-    # Opponent acts
-    s2 = opponent_move(s1)
-    w2 = check_winner(s2)
-    if w2 == X:  return s2, +1.0, True
-    if w2 == O:  return s2, -1.0, True
-    if w2 == 'DRAW': return s2, 0.0, True
-    return s2, 0.0, False  # ongoing
+    return s1, 0.0, False  # ongoing
 
 def random_policy(state):
     acts = legal_actions(state)
     return random.choice(acts)
 
-# ---------- Monte Carlo Policy Evaluation (First-Visit) ----------
 def generate_episode(policy):
     s = empty_board()
     done=False
     states_in_episode = [s]
     rewards = []
+    player = X
     while not done:
         a = policy(s)
-        s, r, done = step(s, a)
+        s, r, done = step(s, a, player)
+        player = X if player == O else O
         states_in_episode.append(s)
         rewards.append(r)
 
@@ -96,18 +91,72 @@ def mc_first_visit_V(num_episodes=50000):
 
     return V
 
-def pretty_print_state(state):
-    print(state[0:3])
-    print(state[3:6])
-    print(state[6:9])
+def get_all_states():
+    all_states = set()
 
-# ---------- One-step Improvement using V ----------
+    def bfs(state, player):
+        if state in all_states:
+            return
+        all_states.add(state)
+        _legal_actions = legal_actions(state)
+        for action in _legal_actions:
+            next_player = X if player==O else O
+            next_state, _ , _ = step(state, action, player)
+            bfs(next_state, next_player)
+    
+    bfs(empty_board(), X)
+    return all_states
+
+
+def iterative_policy_evaluation(num_episodes=50000):
+    V = defaultdict(float)
+    all_states = get_all_states()
+    eps = 1e-5
+    done = False
+    num_iters = 0
+    while not done:
+        delta = 0
+        for state in all_states:
+            _legal_actions = legal_actions(state)
+            N = len(_legal_actions)
+            if N == 0:
+                V[state] = 0
+                continue
+            p_a = 1 / N
+            previous_value = V[state]
+            sum_value = 0
+            for action in _legal_actions:
+                next_state, r, is_terminal = step(state, action, X)
+                o_legal_actions = legal_actions(next_state)
+                o_sum_value = 0
+                if not is_terminal:
+                    for o_action in o_legal_actions:
+                        o_next_state, o_r, _ = step(next_state, o_action, O)
+                        o_sum_value += (o_r + V[o_next_state])
+                    o_sum_value /= len(o_legal_actions)
+                else:
+                    o_sum_value += r
+                    
+                sum_value += p_a * o_sum_value
+
+            V[state] = sum_value
+            delta = max(delta, abs(previous_value - sum_value))
+        done = (delta < eps)
+        num_iters += 1
+        print(f"Delta: {delta} / {eps}")
+        
+    return V
+
+def pretty_print_state(state):
+    s = str(state[0:3]) + "\n" + str(state[3:6]) + "\n" + str(state[6:9]) + "\n\n"
+    return s
+
 def greedy_one_step_with_V(state, V):
     _legal_actions = legal_actions(state)
     best_action = random.choice(_legal_actions)
     best_value_next_state = -np.inf
     for action in _legal_actions:
-        next_state, _, _ = step(state, action)
+        next_state, _, _ = step(state, action, X)
         value = V.get(next_state, -np.inf)
         if value > best_value_next_state:
             best_value_next_state = value
@@ -126,19 +175,38 @@ def play_many(policy, n=10000):
     for _ in range(n):
         s = empty_board()
         done=False
+        player=X
         while not done:
             a = policy(s)
-            s, r, done = step(s, a)
+            s, r, done = step(s, a, player)
+            player = X if player == O else O
         if r > 0: wins += 1
         elif r < 0: losses += 1
         else: draws += 1
     return wins/n, draws/n, losses/n
 
 if __name__ == "__main__":
-    print("Estimating V under random policy...")
-    V = mc_first_visit_V(1000000)
-    v_empty = V.get(empty_board(), 0.0)
-    print("V_random(empty) ≈", round(v_empty, 4))
+    
+
+    while (r := input("Which method? 'm' for monte carlo first visit 'p' for iterative policy evaluation. [m/p] ")) not in ['m','p']:
+        print()
+
+    if r == 'm':
+        print("Estimating V under random policy...")
+        V = mc_first_visit_V(50000)
+        v_empty = V.get(empty_board(), 0.0)
+        print("V_random(empty) ≈", round(v_empty, 4))
+        with open('monte_carlo.txt', 'w') as f:
+            for state, value in V.items():
+                f.write(f"Value: {value} \n" + pretty_print_state(state))
+    elif r == 'p':
+        print("Estimating V under random policy with policy iteration...")
+        V = iterative_policy_evaluation(50000)
+        v_empty = V.get(empty_board(), 0.0)
+        print("V_random(empty) ≈", round(v_empty, 4))
+        with open('policy_iteration.txt', 'w') as f:
+            for state, value in V.items():
+                f.write(f"Value: {value} \n" + pretty_print_state(state))
 
     print("Evaluating random vs random:")
     w,d,l = play_many(random_policy, 10000)
